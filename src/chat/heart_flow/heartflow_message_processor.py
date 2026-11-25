@@ -64,9 +64,12 @@ class HeartFCMessageReceiver:
             await MessageUtils.store_message_to_db_async(message)  # 存储消息到数据库
             if chat is not None and not chat_pause_state.is_paused(message.session_id, chat.chat_stream.is_group_session):
                 await chat.register_message(message)
-            from src.services.memory_flow_service import memory_automation_service
+            from src.core.desktop_pet_chat import DESKTOP_PET_PLATFORM
 
-            await memory_automation_service.on_incoming_message(message)
+            if message.platform != DESKTOP_PET_PLATFORM:
+                from src.services.memory_flow_service import memory_automation_service
+
+                await memory_automation_service.on_incoming_message(message)
 
             # 3. 日志记录
             # 官方平台事件可能不带群名，使用已登记会话中的真实名称，与 Maisaka 日志保持一致。

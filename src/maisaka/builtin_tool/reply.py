@@ -53,6 +53,19 @@ _DUPLICATE_TARGET_REPLY_REMINDER_TEMPLATE = (
 )
 
 
+async def _append_desktop_pet_reference_prompt(reply_tool_args: Dict[str, Any], session: Any) -> None:
+    """把桌宠来源聊天流加入本轮回复提示，不改变回复历史或目标。"""
+
+    from src.desktop_pet.reference_context import load_reference_context
+
+    reference = await load_reference_context(session)
+    if reference:
+        reply_tool_args["_plugin_reply_prompt"] = "\n\n".join(
+            block for block in (reply_tool_args.get("_plugin_reply_prompt", ""), reference)
+            if str(block).strip()
+        )
+
+
 def _normalize_reply_arguments(raw_arguments: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """兼容模型把 reply 参数重复包裹在 arguments 字段中的情况。"""
 
@@ -657,6 +670,7 @@ async def _execute_reply(
             # 原有 reply 工具先准备插件参数及正文要求，实验链路才等待并行编排。
             await prepare_extensions()
             reply_tool_args["_plugin_reply_prompt"] = extension_execution.extra_prompt
+        await _append_desktop_pet_reference_prompt(reply_tool_args, tool_ctx.runtime.chat_stream)
         resolved_attachments = None
         if supplement_runner is None and any(
             invocation_arguments.get(key) is not None for key in ("attach_at", "attach_pic", "attach_emoji")

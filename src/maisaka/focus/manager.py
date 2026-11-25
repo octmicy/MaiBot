@@ -10,6 +10,7 @@ import json
 
 from src.chat.message_receive.chat_manager import chat_manager
 from src.common.utils.utils_config import ChatConfigUtils
+from src.desktop_pet.conversation import is_desktop_pet_session
 from src.maisaka.scenes.factory import get_scene
 from src.config.config import config_manager, global_config
 from src.maisaka.context.messages import SessionBackedMessage
@@ -58,8 +59,10 @@ class FocusModeManager:
     def is_enabled_for_session(self, session_id: str, *, is_group_chat: Optional[bool] = None) -> bool:
         if not session_id:
             return False
+        session = chat_manager.get_session_by_session_id(session_id)
+        if is_desktop_pet_session(session):
+            return False
         if is_group_chat is None:
-            session = chat_manager.get_session_by_session_id(session_id)
             if session is None:
                 return False
             is_group_chat = session.is_group_session

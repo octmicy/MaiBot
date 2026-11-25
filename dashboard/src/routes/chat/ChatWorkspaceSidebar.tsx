@@ -3,6 +3,7 @@ import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConversationAvatar, ConversationListItem } from '@/components/ui/conversation'
+import { DesktopPetBadge } from '@/components/DesktopPetBadge'
 import { Button } from '@/components/ui/button'
 import { StatusIndicator } from '@/components/ui/data-browser'
 import { DataPanel, PageFrame } from '@/components/ui/surface'
@@ -143,6 +144,7 @@ const ObservedConversationItem = memo(function ObservedConversationItem({
         avatar={<ConversationAvatar src={avatarUrl} name={session.sessionName} />}
         status={
           <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+            {session.platform === 'desktop_pet' && <DesktopPetBadge />}
             <StatusIndicator
               variant="inline"
               status={getStageStatusLight(status)}

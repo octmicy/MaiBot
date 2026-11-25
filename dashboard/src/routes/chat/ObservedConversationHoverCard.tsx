@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { DesktopPetBadge } from '@/components/DesktopPetBadge'
 import { getChatStreamDetail } from '@/lib/chat-management-api'
 
 import { isFocusFlowId } from './observed-sessions'
@@ -73,7 +74,10 @@ export function ObservedConversationHoverCard({
         onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) schedule(false) }}
       >
         <div className="space-y-1">
-          <p className="break-words text-sm font-semibold">{name}</p>
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="min-w-0 break-words text-sm font-semibold">{name}</p>
+            {platform === 'desktop_pet' && <DesktopPetBadge />}
+          </div>
           <p className="text-muted-foreground break-all">
             {isFocus ? 'Focus 共享流' : <>
               {platform ? `${platform} · ` : ''}{isGroupChat ? '群聊' : '私聊'}{targetId ? ` · ${targetId}` : ''}

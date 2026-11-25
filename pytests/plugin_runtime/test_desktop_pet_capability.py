@@ -184,31 +184,42 @@ async def test_plugin_notice_does_not_use_chat_reply_or_relay(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_only_internal_owner_reply_is_displayed(monkeypatch):
+async def test_only_the_active_desktop_pet_reply_is_displayed(monkeypatch):
+    from src.chat.message_receive.chat_manager import BotChatSession, chat_manager
+
     service = DesktopPetService()
     service._ready = True
     service._closing = False
     service._visible = True
     command = AsyncMock()
     monkeypatch.setattr(service, "_command", command)
-    def message(platform, target, group=None):
-        return {"platform": platform, "message_id": "reply-1", "message_info": {
-            "additional_config": {"platform_io_target_user_id": target}, "group_info": group,
-        }, "raw_message": [{"type": "text", "data": "你好"}]}
-    await service.notify_reply(message("webui", "owner"))
-    await service.notify_reply(message("internal", "someone"))
-    await service.notify_reply(message("internal", "owner", {"group_id": "g"}))
-    assert not service._notifications
+    monkeypatch.setattr(pet_module.global_config.desktop_pet, "conversation_session_id", "source")
+    monkeypatch.setitem(chat_manager.sessions, "pet-current", BotChatSession(
+        "pet-current", "desktop_pet", user_id="owner", account_id="self", scope="source",
+    ))
+    monkeypatch.setitem(chat_manager.sessions, "pet-previous", BotChatSession(
+        "pet-previous", "desktop_pet", user_id="owner", account_id="self", scope="other",
+    ))
+
+    def message(platform, session_id):
+        return {"platform": platform, "session_id": session_id, "message_id": "reply-1",
+                "raw_message": [{"type": "text", "data": "你好"}]}
+
+    await service.notify_reply(message("qq", "source"))
     await service.notify_reply(message("internal", "owner"))
+    await service.notify_reply(message("desktop_pet", "pet-previous"))
+    assert not service._notifications
+    await service.notify_reply(message("desktop_pet", "pet-current"))
     await asyncio.gather(*service._notifications)
     command.assert_awaited_once_with({"type": "reply", "parts": [{"kind": "text", "text": "你好"}],
-                                    "message_id": "reply-1", "sound": pet_module.global_config.desktop_pet.message_sound})
+                                    "message_id": "reply-1", "sound": pet_module.global_config.desktop_pet.message_sound,
+                                    "conversation_id": "source"})
 
     # 窗口隐藏时，主人会话的发言先主动显示窗口再出气泡。
     service._visible = False
     control = AsyncMock()
     monkeypatch.setattr(service, "control", control)
-    await service.notify_reply(message("internal", "owner"))
+    await service.notify_reply(message("desktop_pet", "pet-current"))
     await asyncio.gather(*service._notifications)
     control.assert_awaited_once_with("show")
     assert command.await_count == 2
@@ -239,11 +250,18 @@ async def test_spawn_failure_is_observable_and_does_not_crash_host(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_binding_change_cancels_old_caption_before_accepting_new_stage(monkeypatch):
+    from src.chat.message_receive.chat_manager import BotChatSession, chat_manager
+
     service = DesktopPetService()
     service._ready = True
     service._closing = False
     config = pet_module.global_config.desktop_pet
     monkeypatch.setattr(config, "conversation_session_id", "session-a")
+    for source_id in ("session-a", "session-b"):
+        session_id = "pet-" + source_id
+        monkeypatch.setitem(chat_manager.sessions, session_id, BotChatSession(
+            session_id, "desktop_pet", user_id="owner", account_id="self", scope=source_id,
+        ))
     monkeypatch.setattr(pet_module, "caption_enabled", lambda: True)
     monkeypatch.setattr(service, "_can_stream_conversation", lambda: False)
     await service._publish_conversation()
@@ -254,7 +272,7 @@ async def test_binding_change_cancels_old_caption_before_accepting_new_stage(mon
     release_clear = asyncio.Event()
 
     async def summarize(data):
-        if data["session_id"] == "session-a":
+        if data["session_id"] == "pet-session-a":
             old_summary_started.set()
             await asyncio.Event().wait()
         new_summary_started.set()
@@ -267,7 +285,7 @@ async def test_binding_change_cancels_old_caption_before_accepting_new_stage(mon
 
     monkeypatch.setattr(service._thinking_caption, "_summarize", summarize)
     monkeypatch.setattr(service._thinking_caption, "_send", send)
-    service.observe_stage({"session_id": "session-a", "stage": "生成"})
+    service.observe_stage({"session_id": "pet-session-a", "stage": "生成"})
     await asyncio.wait_for(old_summary_started.wait(), timeout=1)
     old_task = service._thinking_caption._task
 
@@ -275,12 +293,12 @@ async def test_binding_change_cancels_old_caption_before_accepting_new_stage(mon
     publish = asyncio.create_task(service._publish_conversation())
     try:
         await asyncio.wait_for(clear_started.wait(), timeout=1)
-        service.observe_stage({"session_id": "session-b", "stage": "生成"})
+        service.observe_stage({"session_id": "pet-session-b", "stage": "生成"})
         assert service._thinking_caption._task is None
     finally:
         release_clear.set()
         await publish
     assert old_task.cancelled()
 
-    service.observe_stage({"session_id": "session-b", "stage": "生成"})
+    service.observe_stage({"session_id": "pet-session-b", "stage": "生成"})
     await asyncio.wait_for(new_summary_started.wait(), timeout=1)

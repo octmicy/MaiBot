@@ -1,51 +1,36 @@
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.desktop_pet.conversation import describe_conversation, require_current_conversation, route_relay_message
+from src.chat.message_receive.chat_manager import BotChatSession
+from src.desktop_pet import conversation
+from src.desktop_pet.conversation import describe_conversation, require_current_conversation
 
 
-def test_selected_group_preserves_route_without_impersonating_a_member():
-    session = SimpleNamespace(
-        session_id="group-route",
-        platform="qq",
-        group_id="123456",
-        group_name="麦麦群",
-        account_id="98765",
-        scope="primary",
-        user_id="ordinary-member",
+@pytest.mark.parametrize(
+    ("group_id", "group_name", "user_id", "nickname", "expected_name", "expected_id"),
+    [
+        ("123456", "麦麦群", None, None, "麦麦群", "123456"),
+        (None, None, "11112222", "麦麦朋友", "麦麦朋友", "11112222"),
+    ],
+)
+def test_describe_reference_uses_the_real_chat_name(
+    group_id, group_name, user_id, nickname, expected_name, expected_id
+):
+    session = BotChatSession(
+        "source",
+        "qq",
+        group_id=group_id,
+        group_name=group_name,
+        user_id=user_id,
+        user_nickname=nickname,
     )
-    packet = {
-        "message_info": {
-            "user_info": {"user_id": "desktop-owner", "user_nickname": "主人"},
-            "additional_config": {"at_bot": True},
-        }
-    }
-    route_relay_message(packet, session)
-    assert packet["account_id"] == "98765"
-    assert packet["scope"] == "primary"
-    assert packet["message_info"]["group_info"] == {"group_id": "123456", "group_name": "麦麦群", "platform": "qq"}
-    assert packet["message_info"]["user_info"]["user_id"] == "desktop-owner"
-    assert describe_conversation(session)["target_id"] == "123456"
-
-
-def test_private_chat_uses_existing_target_without_assigning_the_targets_identity():
-    session = SimpleNamespace(
-        session_id="private-route",
-        platform="qq",
-        group_id=None,
-        user_id="11112222",
-        user_nickname="麦麦朋友",
-        user_cardname=None,
-        account_id="98765",
-        scope=None,
-    )
-    packet = {"message_info": {"user_info": {"user_id": "desktop-owner", "user_nickname": "主人"}}}
-    route_relay_message(packet, session)
-    assert "group_info" not in packet["message_info"]
-    assert packet["message_info"]["user_info"]["user_id"] != session.user_id
-    assert describe_conversation(session)["target_id"] == "11112222"
+    description = describe_conversation(session)
+    assert description["name"] == expected_name
+    assert description["target_id"] == expected_id
+    assert description["conversation_id"] == "source"
 
 
 def test_stale_and_legacy_clients_cannot_send_to_the_new_target():
@@ -56,114 +41,89 @@ def test_stale_and_legacy_clients_cannot_send_to_the_new_target():
         with pytest.raises(ValueError, match="会话"):
             require_current_conversation("existing", expected)
     with pytest.raises(ValueError, match="会话"):
-        require_current_conversation("new-binding", "")
-    with pytest.raises(ValueError, match="会话"):
         require_current_conversation("", "former")
 
 
-def test_register_bound_private_message_keeps_existing_route_and_identity(monkeypatch):
-    from src.chat.message_receive.chat_manager import BotChatSession, ChatManager
-    from src.common.utils.utils_session import SessionUtils
+def test_pet_conversations_cannot_be_selected_as_reference(monkeypatch):
+    from src.chat.message_receive.chat_manager import chat_manager
 
-    manager = ChatManager()
-    save_session = Mock()
-    monkeypatch.setattr(manager, "_save_session", save_session)
-    session_id = SessionUtils.calculate_session_id("qq", user_id="12345", account_id="98765")
-    session = BotChatSession(session_id, "qq", user_id="12345", user_nickname="联系人", account_id="98765")
-    manager.sessions[session.session_id] = session
-    message = SimpleNamespace(
-        session_id="",
-        message_info=SimpleNamespace(
-            group_info=None,
-            user_info=SimpleNamespace(user_id="owner", user_nickname="桌宠 · 主人", user_cardname="桌宠 · 主人"),
-        ),
-    )
-    manager.register_bound_message(session, message)
-
-    assert message.session_id == session_id
-    assert list(manager.sessions) == [session_id]
-    assert manager.last_messages[session_id] is message
-    assert session.user_nickname == "联系人"
-    assert session.user_id == "12345"
-
-    restored = manager._get_or_create_session("qq", "12345", account_id="98765")
-    assert restored is session
-    assert session.user_nickname == "联系人"
-    assert session.user_cardname is None
-    save_session.assert_not_called()
-
-
-def test_real_platform_message_still_updates_private_contact_identity(monkeypatch):
-    from src.chat.message_receive.chat_manager import BotChatSession, ChatManager
-    from src.common.utils.utils_session import SessionUtils
-
-    manager = ChatManager()
-    monkeypatch.setattr(manager, "_save_session", Mock())
-    session_id = SessionUtils.calculate_session_id("qq", user_id="12345", account_id="98765")
-    session = BotChatSession(session_id, "qq", user_id="12345", user_nickname="旧昵称", account_id="98765")
-    manager.sessions[session.session_id] = session
-    message = SimpleNamespace(
-        platform="qq",
-        account_id="98765",
-        scope=None,
-        session_id="",
-        message_info=SimpleNamespace(
-            group_info=None,
-            user_info=SimpleNamespace(user_id="12345", user_nickname="新昵称", user_cardname="新名片"),
-        ),
-    )
-
-    manager.register_message(message)
-
-    assert session.user_nickname == "新昵称"
-    assert session.user_cardname == "新名片"
+    pet = BotChatSession("pet-chat", "desktop_pet", user_id="owner", account_id="self", scope="source")
+    monkeypatch.setattr(chat_manager, "get_existing_session_by_session_id", Mock(return_value=pet))
+    with pytest.raises(ValueError, match="不可绑定"):
+        conversation.resolve_conversation("pet-chat")
 
 
 @pytest.mark.asyncio
-async def test_relay_uses_the_exact_selected_session_and_never_broadcasts_to_owner_chat(monkeypatch):
-    from src.desktop_pet import conversation
+async def test_desktop_pet_uses_its_own_sessions_for_each_reference_and_default(monkeypatch):
+    from src.chat.message_receive import bot as bot_module
+    from src.chat.message_receive.chat_manager import ChatManager
     from src.webui.routers.chat import service
 
-    bound = SimpleNamespace(
-        session_id="private-with-scope",
-        platform="qq",
-        group_id=None,
-        user_id="12345",
-        account_id="98765",
-        scope="adapter-a",
-    )
-    monkeypatch.setattr(
-        conversation, "resolve_conversation", lambda value: bound if value == bound.session_id else None
-    )
+    manager = ChatManager()
+    sources = {
+        "group": BotChatSession("group", "qq", group_id="123456", group_name="麦麦群", account_id="external-bot"),
+        "private": BotChatSession(
+            "private", "qq", user_id="12345", user_nickname="麦麦朋友", account_id="external-bot"
+        ),
+    }
+    manager.sessions.update(sources)
+    monkeypatch.setattr(manager, "_save_session", Mock())
+    monkeypatch.setattr(import_module("src.chat.message_receive.chat_manager"), "chat_manager", manager)
+    monkeypatch.setattr(bot_module, "chat_manager", manager)
     monkeypatch.setattr(service, "get_internal_chat_user_name", lambda: "主人")
-    process = AsyncMock()
     broadcast = AsyncMock()
-    monkeypatch.setattr(service.chat_bot, "message_process", process)
     monkeypatch.setattr(service.chat_manager, "broadcast_to_group", broadcast)
-    message_id = await service.relay_plugin_chat_message(
-        "builtin.desktop_pet", "测试", conversation_id=bound.session_id
+
+    bot = bot_module.ChatBot()
+    monkeypatch.setattr(bot_module, "chat_bot", bot)
+    monkeypatch.setattr(bot, "_ensure_started", AsyncMock())
+    monkeypatch.setattr(
+        bot, "_invoke_message_hook", AsyncMock(side_effect=lambda _hook, msg: (SimpleNamespace(aborted=False), msg))
     )
-    process.assert_awaited_once()
-    assert process.await_args.kwargs["bound_session"] is bound
-    message = process.await_args.args[0]
-    assert message["message_info"]["message_id"] == message_id
-    assert message["message_info"]["user_info"]["user_id"] == "owner"
-    assert message["message_info"]["additional_config"]["relayed_by_plugin"] == "builtin.desktop_pet"
-    assert message["scope"] == "adapter-a"
+    monkeypatch.setattr("src.files.service.get_file_service", lambda: SimpleNamespace(ingest=AsyncMock()))
+    receive = AsyncMock()
+    monkeypatch.setattr(bot.heartflow_message_receiver, "process_message", receive)
+
+    config = bot_module.global_config.desktop_pet
+    pet_sessions = []
+    for source in ("group", "private", "", "group"):
+        monkeypatch.setattr(config, "conversation_session_id", source)
+        message_id = await conversation.submit_desktop_pet_message(source, "这句仅在桌宠里显示", [])
+        message = receive.await_args.args[0]
+        pet_sessions.append(message.session_id)
+        assert message.message_id == message_id
+        assert message.platform == "desktop_pet"
+        assert message.account_id == "self"
+        assert message.scope == (source or None)
+        assert message.message_info.user_info.user_id == "owner"
+        assert message.message_info.group_info is None
+        assert message.message_info.additional_config["relayed_by_plugin"] == "builtin.desktop_pet"
+        assert manager.sessions[message.session_id].scope == (source or None)
+
+    assert len(set(pet_sessions)) == 3
+    assert pet_sessions[0] == pet_sessions[-1]
+    assert all(source not in manager.last_messages for source in sources)
+    assert sources["group"].group_name == "麦麦群"
+    assert sources["private"].user_nickname == "麦麦朋友"
     broadcast.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_bound_relay_rechecks_the_binding_after_message_processing(monkeypatch):
+async def test_desktop_pet_rechecks_reference_after_message_processing(monkeypatch):
     from src.chat.message_receive import bot as bot_module
-    from src.webui.routers.chat.service import create_message_data
+    from src.chat.message_receive.chat_manager import chat_manager
+    from src.webui.routers.chat import service
 
-    bound = SimpleNamespace(session_id="session-a", platform="qq", group_id=None, account_id="98765", scope=None)
-    config = bot_module.global_config.desktop_pet
-    monkeypatch.setattr(config, "conversation_session_id", bound.session_id)
     bot = bot_module.ChatBot()
+    monkeypatch.setattr(bot_module, "chat_bot", bot)
+    config = bot_module.global_config.desktop_pet
+    monkeypatch.setattr(config, "conversation_session_id", "session-a")
+    pet = BotChatSession("pet-a", "desktop_pet", user_id="owner", account_id="self", scope="session-a")
+    monkeypatch.setattr(chat_manager, "get_or_create_session", AsyncMock(return_value=pet))
+    monkeypatch.setattr(conversation, "resolve_conversation", Mock())
+    monkeypatch.setattr(service, "get_internal_chat_user_name", lambda: "主人")
     register = Mock(side_effect=AssertionError("stale message reached registration"))
-    monkeypatch.setattr(bot_module.chat_manager, "register_bound_message", register)
+    monkeypatch.setattr(chat_manager, "register_message", register)
 
     async def switch_after_process(hook, message):
         if hook == "chat.receive.after_process":
@@ -171,8 +131,51 @@ async def test_bound_relay_rechecks_the_binding_after_message_processing(monkeyp
         return SimpleNamespace(aborted=False), message
 
     monkeypatch.setattr(bot, "_invoke_message_hook", switch_after_process)
-    packet = create_message_data("测试", "owner", "主人")
-    route_relay_message(packet, bound)
     with pytest.raises(ValueError, match="会话已切换"):
-        await bot.message_process(packet, bound_session=bound)
+        await conversation.submit_desktop_pet_message("session-a", "测试", [])
     register.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_desktop_pet_reply_is_saved_locally_without_contacting_an_adapter(monkeypatch):
+    from src.chat.message_receive.chat_manager import chat_manager
+    from src.common.data_models.message_component_data_model import MessageSequence, TextComponent
+    from src.desktop_pet.service import desktop_pet_service
+    from src.platform_io.manager import PlatformIOManager
+    from src.plugin_runtime.host.hook_dispatcher import HookDispatchResult
+    from src.services import send_service
+
+    broker = PlatformIOManager()
+    drivers = Mock(side_effect=AssertionError("desktop pet reply tried an adapter"))
+    monkeypatch.setattr(broker, "resolve_drivers", drivers)
+    monkeypatch.setattr(send_service, "get_platform_io_manager", lambda: broker)
+    pet = BotChatSession("pet-chat", "desktop_pet", user_id="owner", account_id="self", scope="qq-group")
+    monkeypatch.setitem(chat_manager.sessions, pet.session_id, pet)
+    save = AsyncMock()
+    notify = AsyncMock()
+    sync_history = Mock()
+    monkeypatch.setattr(send_service, "_store_sent_message", save)
+    monkeypatch.setattr(send_service, "_sync_sent_message_to_maisaka_history", sync_history)
+    monkeypatch.setattr(desktop_pet_service, "notify_reply", notify)
+
+    async def hook(name, *, message, **kwargs):
+        # A rewritten outbound message still uses the host's private route.
+        if name == "send_service.before_send":
+            message = {**message, "platform": "qq", "scope": "external", "session_id": "qq-group"}
+        return HookDispatchResult(name, {"message": message, **kwargs})
+
+    monkeypatch.setattr(send_service, "_get_runtime_manager", lambda: SimpleNamespace(invoke_hook=hook))
+    reply = await send_service._send_to_target_with_message(
+        MessageSequence([TextComponent("只在桌宠回复")]),
+        pet.session_id,
+        sync_to_maisaka_history=True,
+    )
+
+    assert reply is not None
+    assert reply.platform == "desktop_pet"
+    assert reply.scope == "qq-group"
+    assert reply.session_id == pet.session_id
+    save.assert_awaited_once_with(reply)
+    sync_history.assert_called_once()
+    assert notify.await_args.args[0]["session_id"] == pet.session_id
+    drivers.assert_not_called()

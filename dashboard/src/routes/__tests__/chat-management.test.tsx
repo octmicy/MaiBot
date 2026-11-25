@@ -89,6 +89,17 @@ it('创建独立组时无需切换类别', async () => {
     )
   )
 })
+it('相通组成员选择器排除桌宠聊天流', async () => {
+  const user = userEvent.setup()
+  vi.mocked(chats.getChatStreams).mockResolvedValue([
+    { session_id: 'pet-1', display_name: '桌宠私聊 · 项目群', platform: 'desktop_pet' } as chats.ChatStream,
+  ])
+  show()
+  await user.click(await screen.findByRole('button', { name: '新建相通组' }))
+  const dialog = await screen.findByRole('dialog')
+
+  expect(within(dialog).queryByText('桌宠私聊 · 项目群')).not.toBeInTheDocument()
+})
 it('画布滚轮缩放后可重置', async () => {
   const user = userEvent.setup()
   show()

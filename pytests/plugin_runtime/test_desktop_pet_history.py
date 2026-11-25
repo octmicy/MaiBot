@@ -1,8 +1,9 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.chat.message_receive.chat_manager import chat_manager
+from src.desktop_pet import service as pet_module
 from src.desktop_pet.rendering import render_history_events
 from src.desktop_pet.remote_server import validate_event
 from src.desktop_pet.service import DesktopPetService
@@ -22,12 +23,14 @@ def test_remote_history_rejects_invalid_cursors(cursors):
 
 
 @pytest.mark.asyncio
-async def test_history_reuses_monitor_cursor_and_only_resolves_owner_sessions(monkeypatch):
+async def test_history_reuses_monitor_cursor_and_only_loads_the_private_pet_session(monkeypatch):
     service = DesktopPetService()
     command = AsyncMock()
     monkeypatch.setattr(service, "_command", command)
-    resolve = Mock(return_value={"owner-session"})
-    monkeypatch.setattr(chat_manager, "resolve_session_ids_by_target", resolve)
+    monkeypatch.setattr(pet_module.global_config.desktop_pet, "conversation_session_id", "qq-reference")
+    lookup = Mock(return_value=SimpleNamespace(session_id="pet-session"))
+    monkeypatch.setattr(pet_module, "find_desktop_pet_session", lookup)
+    monkeypatch.setattr(service, "_can_stream_conversation", lambda: True)
     load = Mock(return_value=event_store.MonitorEventPage(
         events=[{"event": "message.sent", "data": {
             "event_id": 25, "message_id": "reply", "content": "历史回复", "media": [],
@@ -36,17 +39,19 @@ async def test_history_reuses_monitor_cursor_and_only_resolves_owner_sessions(mo
     monkeypatch.setattr(event_store, "load_session_event_page", load)
 
     await service._publish_history({"request_id": "first", "cursors": {}})
-    load.assert_called_once_with(session_id="owner-session", before_event_id=0)
+    lookup.assert_called_once_with("qq-reference")
+    load.assert_called_once_with(session_id="pet-session", before_event_id=0)
     response = command.await_args.args[0]
-    assert response["cursors"] == {"owner-session": 20}
+    assert response["conversation_id"] == "qq-reference"
+    assert response["cursors"] == {"pet-session": 20}
     assert response["has_more"]
     assert response["items"] == [{"id": "reply", "who": "mai",
                                   "parts": [{"kind": "text", "text": "历史回复"}]}]
 
     load.reset_mock()
     load.return_value = event_store.MonitorEventPage(events=[], oldest_event_id=0, has_more=False)
-    await service._publish_history({"request_id": "older", "cursors": {"owner-session": 20, "other": 99}})
-    load.assert_called_once_with(session_id="owner-session", before_event_id=20)
+    await service._publish_history({"request_id": "older", "cursors": {"pet-session": 20, "qq-reference": 99}})
+    load.assert_called_once_with(session_id="pet-session", before_event_id=20)
     assert command.await_args.args[0]["has_more"] is False
 
 
@@ -55,9 +60,10 @@ async def test_history_failure_is_reported_without_advancing_cursor(monkeypatch)
     service = DesktopPetService()
     command = AsyncMock()
     monkeypatch.setattr(service, "_command", command)
-    monkeypatch.setattr(chat_manager, "resolve_session_ids_by_target", Mock(return_value={"owner-session"}))
+    monkeypatch.setattr(pet_module.global_config.desktop_pet, "conversation_session_id", "")
+    monkeypatch.setattr(pet_module, "find_desktop_pet_session", Mock(return_value=SimpleNamespace(session_id="pet-session")))
     monkeypatch.setattr(event_store, "load_session_event_page", Mock(side_effect=RuntimeError("database unavailable")))
-    await service._publish_history({"request_id": "failed", "cursors": {"owner-session": 20}})
+    await service._publish_history({"request_id": "failed", "cursors": {"pet-session": 20}})
     assert command.await_args.args[0] == {
         "type": "history", "request_id": "failed", "error": "database unavailable",
     }

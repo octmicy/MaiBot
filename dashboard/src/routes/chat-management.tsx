@@ -195,6 +195,7 @@ function GroupEditor({
                         <div className="max-h-56 overflow-auto border-2 p-2">
                           {chats.data
                             ?.filter((chat) =>
+                              chat.platform !== 'desktop_pet' &&
                               chat.display_name.toLowerCase().includes(search.toLowerCase())
                             )
                             .map((chat) => (

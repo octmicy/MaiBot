@@ -38,6 +38,7 @@ from src.common.data_models.message_component_data_model import (
 from src.common.logger import get_logger
 from src.common.utils.utils_message import MessageUtils
 from src.config.config import global_config
+from src.core.desktop_pet_chat import DESKTOP_PET_PLATFORM, DESKTOP_PET_USER_ID
 from src.platform_io import DeliveryBatch, DriverKind, get_platform_io_manager
 from src.platform_io.route_key_factory import RouteKeyFactory
 from src.plugin_runtime.hook_payloads import deserialize_session_message, serialize_session_message
@@ -248,6 +249,14 @@ async def _invoke_send_hook(
     if raw_message is not None:
         try:
             mutated_message = deserialize_session_message(raw_message)
+            if message.platform == DESKTOP_PET_PLATFORM:
+                # 桌宠会话的出站目的地由宿主确定。
+                mutated_message.platform = message.platform
+                mutated_message.session_id = message.session_id
+                mutated_message.account_id = message.account_id
+                mutated_message.scope = message.scope
+                mutated_message.message_info.group_info = None
+                mutated_message.message_info.additional_config["platform_io_target_user_id"] = DESKTOP_PET_USER_ID
         except Exception as exc:
             logger.warning(f"Hook {hook_name} 返回的 message 无法反序列化，已忽略: {exc}")
     return hook_result, mutated_message
@@ -264,6 +273,8 @@ def _inherit_platform_io_route_metadata(target_stream: BotChatSession) -> Dict[s
         路由辅助字段。
     """
     inherited_metadata: Dict[str, object] = {}
+    if target_stream.platform == DESKTOP_PET_PLATFORM:
+        return {"platform_io_target_user_id": DESKTOP_PET_USER_ID}
 
     context_message = target_stream.context.message if target_stream.context else None
     if context_message is not None:
@@ -898,7 +909,8 @@ async def _send_via_platform_io(
 
     platform_io_manager = get_platform_io_manager()
     try:
-        await platform_io_manager.ensure_send_pipeline_ready()
+        if message.platform != DESKTOP_PET_PLATFORM:
+            await platform_io_manager.ensure_send_pipeline_ready()
     except Exception as exc:
         logger.error(f"[SendService] 准备 Platform IO 发送管线失败: {exc}", exc_info=True)
         return None
@@ -946,7 +958,8 @@ async def _send_via_platform_io(
             await asyncio.to_thread(_record_sent_emoji_usage, message)
         if storage_message:
             await _store_sent_message(message)
-        await _notify_memory_automation_on_message_sent(message)
+        if message.platform != DESKTOP_PET_PLATFORM:
+            await _notify_memory_automation_on_message_sent(message)
         should_log_delivery = show_log and any(
             receipt.driver_kind != DriverKind.LOCAL
             for receipt in delivery_batch.sent_receipts

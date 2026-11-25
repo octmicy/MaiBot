@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ChatStreamSettingsDialog, type ChatStreamSettingsTarget } from '@/components/chat-stream-settings-dialog'
+import { DesktopPetBadge } from '@/components/DesktopPetBadge'
 import { Button } from '@/components/ui/button'
 import { ConversationAvatar, ConversationListItem } from '@/components/ui/conversation'
 import { StatusIndicator } from '@/components/ui/data-browser'
@@ -89,6 +90,7 @@ const ObservedRow = memo(function ObservedRow({
         avatar={<ConversationAvatar src={avatarUrl} name={session.sessionName} />}
         status={
           <span className="inline-flex min-w-0 items-center gap-1 pr-1.5">
+            {session.platform === 'desktop_pet' && <DesktopPetBadge />}
             <StatusIndicator
               variant="inline"
               status={getStageStatusLight(status)}

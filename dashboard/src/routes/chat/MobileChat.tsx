@@ -465,7 +465,7 @@ export function MobileChatList({
               <ChatRow
                 avatar={<ObservedAvatar session={session} />}
                 title={session.sessionName}
-                badge={isFocusFlowId(session.sessionId) ? 'Focus 共享流' : t('chat.sidebar.observedBadge')}
+                badge={session.platform === 'desktop_pet' ? '桌宠对话' : isFocusFlowId(session.sessionId) ? 'Focus 共享流' : t('chat.sidebar.observedBadge')}
                 preview={preview}
                 time={formatRowTime(session.lastActivity, language)}
                 onOpen={() => onOpenObserved(session.sessionId)}

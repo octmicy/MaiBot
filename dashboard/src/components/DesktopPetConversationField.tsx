@@ -35,7 +35,7 @@ export function DesktopPetConversationField({ value, onChange }: FieldHookCompon
     queryFn: getAllChatStreams,
     enabled: open || Boolean(selected),
     select: items => items.filter(item => item.target_id &&
-      !['internal', 'bot_console', 'maisaka_cli'].includes(item.platform)),
+      !['internal', 'bot_console', 'maisaka_cli', 'desktop_pet'].includes(item.platform)),
   })
   const selectedStream = sessions.data?.find(item => item.session_id === selected)
   const keyword = search.trim().toLowerCase()
@@ -43,7 +43,7 @@ export function DesktopPetConversationField({ value, onChange }: FieldHookCompon
     `${item.display_name} ${targetLabel(item)}`.toLowerCase().includes(keyword))
   return (
     <div className="space-y-2">
-      <div className="text-sm font-medium">聊天会话</div>
+      <div className="text-sm font-medium">参考聊天流</div>
       <Dialog open={open} onOpenChange={next => {
         if (next) { setDraft(selected); setSearch('') }
         setOpen(next)
@@ -53,17 +53,18 @@ export function DesktopPetConversationField({ value, onChange }: FieldHookCompon
             className="h-auto min-h-10 max-w-full justify-start whitespace-normal text-left">
             {selectedStream ? <SessionAvatar stream={selectedStream} /> : <MessagesSquare />}
             <span className="min-w-0 break-all">
-              {selectedStream?.display_name ?? (selected ? (sessions.isPending ? '正在加载会话…' : '所选会话不可用') : '主人私聊')}
+              {selectedStream?.display_name ?? (selected ? (sessions.isPending ? '正在加载会话…' : '参考聊天流不可用') : '桌宠私聊')}
               {selectedStream && <small className="text-muted-foreground block">{targetLabel(selectedStream)}</small>}
             </span>
           </Button>
         </DialogTrigger>
         <DialogContent aria-describedby={undefined}>
-          <DialogHeader><DialogTitle>选择聊天会话</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>选择参考聊天流</DialogTitle></DialogHeader>
+          <p className="text-muted-foreground text-sm">桌宠会把所选聊天流作为只读参考。桌宠问答保存在独立的桌宠对话中，不会发送到原聊天流。</p>
           <Input aria-label="搜索名称或号码" placeholder="搜索名称或号码" value={search} onChange={event => setSearch(event.target.value)} />
           <div className="max-h-[min(45dvh,22rem)] min-h-0 overflow-auto">
-            {!keyword && <ConversationListItem title="主人私聊" preview="" selected={!draft}
-              avatar={<ConversationAvatar name="主人私聊" bot />} onSelect={() => setDraft('')}
+            {!keyword && <ConversationListItem title="桌宠私聊" preview="" selected={!draft}
+              avatar={<ConversationAvatar name="桌宠私聊" bot />} onSelect={() => setDraft('')}
               status={!draft ? <Check className="size-4" /> : undefined} />}
             {filtered.map(item => <ConversationListItem key={item.session_id} title={item.display_name} preview={targetLabel(item)}
               selected={draft === item.session_id} avatar={<SessionAvatar stream={item} />}
@@ -72,11 +73,10 @@ export function DesktopPetConversationField({ value, onChange }: FieldHookCompon
             {sessions.isError && <Button type="button" variant="ghost" onClick={() => void sessions.refetch()}>读取失败，重试</Button>}
             {sessions.isSuccess && !filtered.length && <p className="text-muted-foreground p-2 text-sm">没有匹配的会话</p>}
           </div>
-          {draft && draft !== selected && <p role="status" className="text-muted-foreground text-sm">Bot 的回复可能发送到所选聊天。</p>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button>
             <Button type="button" disabled={draft === selected || (Boolean(draft) && !sessions.data?.some(item => item.session_id === draft))}
-              onClick={() => { onChange?.(draft); setOpen(false) }}>确认绑定</Button>
+              onClick={() => { onChange?.(draft); setOpen(false) }}>保存选择</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

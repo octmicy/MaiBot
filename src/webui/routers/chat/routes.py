@@ -1015,6 +1015,8 @@ def _chat_session_detail_to_response(chat_session: ChatSession) -> Dict[str, Any
         "display_name": _get_chat_display_name(chat_session, None),
         "chat_type": _get_chat_type(chat_session),
         "platform": chat_session.platform,
+        "account_id": chat_session.account_id,
+        "scope": chat_session.scope,
         "target_id": _get_chat_target_id(chat_session),
         "group_id": chat_session.group_id,
         "user_id": chat_session.user_id,

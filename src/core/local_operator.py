@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, Iterable, Mapping, Set
 
+from .desktop_pet_chat import DESKTOP_PET_BOT_ID, DESKTOP_PET_PLATFORM
+
 BOT_CONSOLE_PLATFORM = "bot_console"
 BOT_CONSOLE_USER_ID = "local_operator"
 BOT_CONSOLE_BOT_ID = "__maibot_console_bot__"
@@ -13,6 +15,7 @@ PLUGIN_RELAY_CONFIG_KEY = "relayed_by_plugin"
 LOCAL_PLATFORM_BOT_IDS: Dict[str, str] = {
     BOT_CONSOLE_PLATFORM: BOT_CONSOLE_BOT_ID,
     MAISAKA_CLI_PLATFORM: MAISAKA_CLI_BOT_ID,
+    DESKTOP_PET_PLATFORM: DESKTOP_PET_BOT_ID,
 }
 
 

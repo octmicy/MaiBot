@@ -22,6 +22,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DesktopPetBadge } from '@/components/DesktopPetBadge'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
@@ -1370,7 +1371,10 @@ export function ChatStreamSettingsDialog({
         <DialogContent style={{ '--dialog-width': '44rem' } as CSSProperties}>
           <DialogHeader>
             <DialogTitle>
-              {chat ? formatChatDisplayName(chat.display_name, chat.account_id) : '聊天流详情'}
+              <span className="inline-flex items-center gap-2">
+                {chat ? formatChatDisplayName(chat.display_name, chat.account_id) : '聊天流详情'}
+                {detailQuery.data?.platform === 'desktop_pet' && <DesktopPetBadge />}
+              </span>
             </DialogTitle>
           </DialogHeader>
           <DialogBody>

@@ -15,11 +15,14 @@ from src.common.logger import get_logger
 from src.common.paths import get_instance_root
 from src.common.runtime_loop import run_on_main_loop
 from src.config.config import config_manager, global_config
-from src.core.internal_chat import INTERNAL_CHAT_PLATFORM, INTERNAL_CHAT_USER_ID
+from src.core.desktop_pet_chat import DESKTOP_PET_PLATFORM
 from src.services.schedules.service import schedule_service
 
 from .app_conditions import matching_application, running_applications
-from .conversation import describe_conversation, require_current_conversation, resolve_conversation
+from .conversation import (
+    describe_conversation, find_desktop_pet_session, get_or_create_desktop_pet_session, is_desktop_pet_session,
+    require_current_conversation, resolve_conversation, submit_desktop_pet_message,
+)
 from .rendering import render_parts
 from .remote_protocol import RemotePeer, decode_screenshot
 from .screen import DesktopScreenshot, ScreenTimeline, capture_desktop, compose_screen_timeline
@@ -68,12 +71,9 @@ class DesktopPetService:
         self._bubble = ""
 
     def observe_stage(self, data: Dict[str, Any]) -> None:
-        from .chat_tools import is_owner_chat
-
         session_id = global_config.desktop_pet.conversation_session_id
         if (self._ready and not self._closing and self._caption_conversation_id == session_id
-                and (self.is_bound_conversation(data["session_id"]) or
-                     (not session_id and is_owner_chat(data["session_id"])))):
+                and self._is_active_pet_session(data["session_id"])):
             self._thinking_caption.update(data if caption_enabled() else {"session_id": data["session_id"]})
 
     def status(self) -> Dict[str, Any]:
@@ -249,15 +249,19 @@ class DesktopPetService:
         return {"accepted": True, "request_id": request_id, "message_id": message_id}
 
     async def _relay_conversation(self, payload: Dict[str, Any]) -> str:
-        from src.webui.routers.chat.service import relay_plugin_chat_message
-
         conversation_id = global_config.desktop_pet.conversation_session_id
         require_current_conversation(conversation_id, payload.get("conversation_id"))
-        return await relay_plugin_chat_message("builtin.desktop_pet", payload["text"], images=payload["images"],
-                                               conversation_id=conversation_id)
+        return await submit_desktop_pet_message(conversation_id, payload["text"], payload["images"])
 
-    def is_bound_conversation(self, session_id: str) -> bool:
-        return bool(session_id and session_id == global_config.desktop_pet.conversation_session_id)
+    async def submit_chat(self, text: str) -> str:
+        return await submit_desktop_pet_message(global_config.desktop_pet.conversation_session_id, text, [])
+
+    def _is_active_pet_session(self, session_id: str) -> bool:
+        from src.chat.message_receive.chat_manager import chat_manager
+
+        session = chat_manager.get_session_by_session_id(session_id)
+        return bool(session is not None and is_desktop_pet_session(session)
+                    and (session.scope or "") == global_config.desktop_pet.conversation_session_id)
 
     async def _publish_conversation(self) -> None:
         async with self._conversation_publish_lock:
@@ -270,7 +274,7 @@ class DesktopPetService:
             self._caption_conversation_id = session_id
             if not self._can_stream_conversation():
                 return
-            command = {"type": "conversation", "conversation_id": session_id, "name": "主人私聊"}
+            command = {"type": "conversation", "conversation_id": session_id, "name": "桌宠私聊"}
             if session_id:
                 try:
                     session = await asyncio.to_thread(resolve_conversation, session_id)
@@ -287,6 +291,9 @@ class DesktopPetService:
         return await self._todo_command({**payload, "type": "todo", "action": action})
 
     async def _todo_command(self, command: Dict[str, Any]) -> Dict[str, Any]:
+        if command["action"] == "add":
+            session = await get_or_create_desktop_pet_session(global_config.desktop_pet.conversation_session_id)
+            return await schedule_service.command(command, session_id=session.session_id)
         return await schedule_service.command(command)
 
     async def _local_todo(self, event: Dict[str, Any]) -> None:
@@ -422,7 +429,6 @@ class DesktopPetService:
         return self._screen_reader_task is not None and not self._screen_reader_task.done()
 
     async def _publish_history(self, event: Dict[str, Any]) -> None:
-        from src.chat.message_receive.chat_manager import chat_manager
         from src.maisaka.monitor.event_store import load_session_event_page
 
         from .rendering import render_history_events
@@ -431,22 +437,15 @@ class DesktopPetService:
         conversation_id = global_config.desktop_pet.conversation_session_id
         try:
             if conversation_id:
-                if self._remote is not None and not self._remote.capabilities.get("chat_binding"):
-                    raise ValueError("此桌宠版本不支持会话绑定，请更新客户端")
                 response["conversation_id"] = conversation_id
-                session = await asyncio.to_thread(resolve_conversation, conversation_id)
-                session_ids = {session.session_id}
-            else:
-                session_ids = await asyncio.to_thread(
-                    chat_manager.resolve_session_ids_by_target,
-                    platform=INTERNAL_CHAT_PLATFORM, target_id=INTERNAL_CHAT_USER_ID, chat_type="private",
-                )
+                if not self._can_stream_conversation():
+                    raise ValueError("此桌宠版本不支持会话绑定，请更新客户端")
+            session = await asyncio.to_thread(find_desktop_pet_session, conversation_id)
             cursors = event["cursors"]
             next_cursors = {}
             events = []
-            for session_id in session_ids:
-                if cursors and session_id not in cursors:
-                    continue
+            if session is not None and (not cursors or session.session_id in cursors):
+                session_id = session.session_id
                 before_event_id = cursors.get(session_id, 0)
                 if type(before_event_id) is not int or before_event_id < 0:
                     raise ValueError("历史记录游标无效")
@@ -455,8 +454,7 @@ class DesktopPetService:
                 events.extend(page.events)
                 if page.has_more:
                     next_cursors[session_id] = page.oldest_event_id
-            events.sort(key=lambda item: item["data"]["event_id"])
-            response.update(items=await asyncio.to_thread(render_history_events, events, show_senders=bool(conversation_id)),
+            response.update(items=await asyncio.to_thread(render_history_events, events),
                             cursors=next_cursors, has_more=bool(next_cursors))
         except Exception as exc:
             logger.exception("桌宠历史记录读取失败")
@@ -525,7 +523,10 @@ class DesktopPetService:
         deadline = loop.time() + global_config.desktop_pet.screen_read_interval_seconds
         first_sample = True
         try:
+            session = await get_or_create_desktop_pet_session(global_config.desktop_pet.conversation_session_id)
             while self._ready and not self._closing and global_config.desktop_pet.screen_read_enabled:
+                if not self._is_active_pet_session(session.session_id):
+                    raise ValueError("桌宠会话已切换")
                 if self._remote is None:
                     shot = await self.capture_screen()
                 else:
@@ -545,7 +546,10 @@ class DesktopPetService:
                     if timeline.changed:
                         frames = list(timeline.frames)
                         storyboard = await asyncio.to_thread(compose_screen_timeline, frames)
-                        await self._deliver_screen(storyboard, frame_times=[frame.captured_at for frame in frames])
+                        await self._deliver_screen(
+                            storyboard, session_id=session.session_id,
+                            frame_times=[frame.captured_at for frame in frames],
+                        )
                         timeline.delivered()
                     # 不追赶休眠期间的周期；采样与投递串行，不堆积待处理截图。
                     deadline = loop.time() + global_config.desktop_pet.screen_read_interval_seconds
@@ -565,13 +569,17 @@ class DesktopPetService:
         self._screen_busy = True
         try:
             await self._publish_screen_state()
+            self._require_screen_access()
+            session = await get_or_create_desktop_pet_session(global_config.desktop_pet.conversation_session_id)
             shot = await self.capture_screen()
-            await self._deliver_screen(shot)
+            await self._deliver_screen(shot, session_id=session.session_id)
         finally:
             self._screen_busy = False
             await self._publish_screen_state()
 
-    async def _deliver_screen(self, shot: DesktopScreenshot, *, frame_times: Optional[List[str]] = None) -> None:
+    async def _deliver_screen(
+        self, shot: DesktopScreenshot, *, session_id: str, frame_times: Optional[List[str]] = None,
+    ) -> None:
         self._screen_busy = True
         try:
             await self._publish_screen_state()
@@ -587,7 +595,7 @@ class DesktopPetService:
             self._require_screen_access()
             await self._enqueue_owner_task(source_kind="desktop_pet_screen",
                 text=text, reason="桌宠桌面阅读",
-                images=[ImageComponent(binary_hash=shot.digest, binary_data=shot.data)])
+                images=[ImageComponent(binary_hash=shot.digest, binary_data=shot.data)], session_id=session_id)
             self._screen_last_capture = shot.captured_at
         finally:
             self._screen_busy = False
@@ -617,14 +625,13 @@ class DesktopPetService:
             await self._command({"type": "exploration_state",
                                  "enabled": global_config.experimental.desktop_pet_exploration_enabled})
 
-    async def _exploration_session_id(self) -> str:
-        from src.chat.message_receive.chat_manager import chat_manager
-
-        sessions = await asyncio.to_thread(chat_manager.resolve_sessions_by_target,
-            platform=INTERNAL_CHAT_PLATFORM, target_id=INTERNAL_CHAT_USER_ID, chat_type="private")
-        if len(sessions) != 1:
-            raise ValueError("请先在桌宠或网页聊天中建立唯一的主人会话")
-        return sessions[0].session_id
+    async def _require_active_pet_session_id(self) -> str:
+        source_id = global_config.desktop_pet.conversation_session_id
+        session = await asyncio.to_thread(find_desktop_pet_session, source_id)
+        require_current_conversation(global_config.desktop_pet.conversation_session_id, source_id)
+        if session is None:
+            raise ValueError("请先在当前桌宠会话中发一条消息")
+        return session.session_id
 
     async def _publish_exploration_tasks(self, task_id: str, request_id: str) -> None:
         from .exploration import experience_ref, exploration_tasks
@@ -632,7 +639,7 @@ class DesktopPetService:
         payload: Dict[str, Any] = {"type": "exploration_tasks", "request_id": request_id,
                                    "items": [], "selected": None, "error": ""}
         try:
-            session_id = await self._exploration_session_id()
+            session_id = await self._require_active_pet_session_id()
             records = await asyncio.to_thread(exploration_tasks, session_id)
             payload["items"] = [{**{key: item[key] for key in ("id", "goal", "status", "created_at", "updated_at")},
                                  "resource_count": len(item.get("resources", [])),
@@ -654,16 +661,19 @@ class DesktopPetService:
 
         error = ""
         task = None
+        session_id = ""
         try:
             if not global_config.experimental.desktop_pet_exploration_enabled:
                 raise PermissionError("请先在实验性功能中开启桌宠自由探索")
             goal = validate_goal(goal)
-            session_id = await self._exploration_session_id()
+            session = await get_or_create_desktop_pet_session(global_config.desktop_pet.conversation_session_id)
+            session_id = session.session_id
             task = await asyncio.to_thread(exploration_tasks, session_id, "create", goal=goal)
             template = await asyncio.to_thread(prompt_manager.get_prompt, "desktop_pet_exploration")
             text = await prompt_manager.render_prompt(template)
             await self._enqueue_owner_task(source_kind="desktop_pet_exploration",
-                text=text + f"\n[exploration_task_id={task['id']}]\n" + goal, reason="主人发起探索任务")
+                text=text + f"\n[exploration_task_id={task['id']}]\n" + goal, reason="主人发起探索任务",
+                session_id=session_id)
         except Exception as exc:
             error = str(exc)
             logger.exception("桌宠探索任务投递失败")
@@ -689,11 +699,10 @@ class DesktopPetService:
             and time.monotonic() - self._last_owner_chat_activity > PROACTIVE_WAKE_SILENCE_SECONDS
         )
 
-    def notify_user_message(self, platform: str, user_id: str, *, is_group: bool) -> None:
-        """主人在桌宠或网页聊天中回复后，重新允许最多两次主动唤醒。"""
-        if platform == INTERNAL_CHAT_PLATFORM and user_id == INTERNAL_CHAT_USER_ID and not is_group:
-            self._unanswered_proactive_wakes = 0
-            self._last_owner_chat_activity = time.monotonic()
+    def notify_user_message(self) -> None:
+        """收到桌宠消息后，重新允许最多两次主动唤醒。"""
+        self._unanswered_proactive_wakes = 0
+        self._last_owner_chat_activity = time.monotonic()
 
     async def _run_todos(self) -> None:
         # 定时日程由主程序独立调度；仅桌面应用条件需要设备在线。
@@ -783,18 +792,17 @@ class DesktopPetService:
 
     async def _enqueue_owner_task(
         self, *, source_kind: str, text: str, reason: str, images: Optional[List[ImageComponent]] = None,
+        session_id: Optional[str] = None,
     ) -> None:
-        from src.chat.message_receive.chat_manager import chat_manager
         from src.chat.heart_flow.heartflow_manager import heartflow_manager
 
-        sessions = await asyncio.to_thread(chat_manager.resolve_sessions_by_target,
-            platform=INTERNAL_CHAT_PLATFORM, target_id=INTERNAL_CHAT_USER_ID, chat_type="private")
-        if len(sessions) != 1:
-            raise ValueError("无法确定主人聊天流，请先在桌宠或网页聊天中建立唯一的主人会话")
-        session = sessions[0]
-        if not await heartflow_manager._is_session_allowed(session):
-            raise PermissionError("当前策略禁止唤醒主人聊天流")
-        runtime = await heartflow_manager.get_or_create_heartflow_chat(session.session_id)
+        if session_id is None:
+            session_id = await self._require_active_pet_session_id()
+        if not self._is_active_pet_session(session_id):
+            raise ValueError("桌宠会话已切换")
+        runtime = await heartflow_manager.get_or_create_heartflow_chat(session_id)
+        if not self._is_active_pet_session(session_id):
+            raise ValueError("桌宠会话已切换")
         if source_kind == "desktop_pet_proactive_wake" and not self._can_wake_proactively():
             return
         runtime.enqueue_internal_task(source_kind=source_kind, text=text, reason=reason, images=images if images is not None else [])
@@ -997,66 +1005,42 @@ class DesktopPetService:
         return self.status()
 
     async def notify_thinking(self, session_id: str) -> None:
-        from src.chat.message_receive.chat_manager import chat_manager
-
-        if self._ready and not self._closing:
-            session = chat_manager.get_session_by_session_id(session_id)
-            conversation_id = global_config.desktop_pet.conversation_session_id
-            if (self.is_bound_conversation(session_id) or (not conversation_id and session is not None
-                    and session.platform == INTERNAL_CHAT_PLATFORM and not session.group_id
-                    and session.user_id == INTERNAL_CHAT_USER_ID)):
-                if conversation_id and self._remote is not None and not self._remote.capabilities.get("chat_binding"):
-                    return
-                self._thinking = True
-                command = {"type": "thinking"}
-                if conversation_id:
-                    command["conversation_id"] = conversation_id
-                self._observe(self._command(command))
+        conversation_id = global_config.desktop_pet.conversation_session_id
+        if self._can_stream_active_chat(conversation_id) and self._is_active_pet_session(session_id):
+            self._thinking = True
+            self._observe(self._command({"type": "thinking", "conversation_id": conversation_id}))
 
     async def notify_reply(self, message: Dict[str, Any]) -> None:
-        if global_config.desktop_pet.conversation_session_id:
-            if self.is_bound_conversation(message.get("session_id", "")) and self._can_stream_conversation():
-                self._observe(self._render_reply(message["raw_message"], message["message_id"], message["session_id"]))
-            return
-        if message["platform"] != INTERNAL_CHAT_PLATFORM:
-            return
-        info = message["message_info"]
-        if info.get("group_info") or info.get("additional_config", {}).get("platform_io_target_user_id") != INTERNAL_CHAT_USER_ID:
+        if message["platform"] != DESKTOP_PET_PLATFORM or not self._is_active_pet_session(message.get("session_id", "")):
             return
         self._last_owner_chat_activity = time.monotonic()
-        if not self._ready or self._closing:
-            return
-        self._observe(self._render_reply(message["raw_message"], message["message_id"]))
+        conversation_id = global_config.desktop_pet.conversation_session_id
+        if self._can_stream_active_chat(conversation_id):
+            self._observe(self._render_reply(message["raw_message"], message["message_id"], conversation_id))
+
+    def _can_stream_active_chat(self, source_id: str) -> bool:
+        return self._ready and not self._closing and (not source_id or self._can_stream_conversation())
 
     def _can_stream_conversation(self) -> bool:
         return self._ready and not self._closing and (self._remote is None or self._remote.capabilities.get("chat_binding", False))
-
-    def notify_conversation_message(self, message: Dict[str, Any]) -> None:
-        if self.is_bound_conversation(message["session_id"]) and self._can_stream_conversation():
-            self._observe(self._render_conversation_message(message))
-
-    async def _render_conversation_message(self, message: Dict[str, Any]) -> None:
-        parts = await asyncio.to_thread(render_parts, message["raw_message"], [])
-        if parts and self.is_bound_conversation(message["session_id"]) and self._can_stream_conversation():
-            user = message["message_info"]["user_info"]
-            await self._command({"type": "conversation_message", "conversation_id": message["session_id"],
-                                 "message_id": message["message_id"], "parts": parts,
-                                 "sender": user.get("user_cardname") or user.get("user_nickname") or user["user_id"]})
 
     async def _render_reply(self, segments: List[Dict[str, Any]], message_id: str, conversation_id: str = "") -> None:
         skipped: List[str] = []
         parts = await asyncio.to_thread(render_parts, segments, skipped)
         if skipped:
-            logger.info("桌宠气泡不显示 %s 消息段，完整内容见网页聊天室", "、".join(skipped))
+            logger.info("桌宠气泡不显示 %s 消息段，完整内容见桌宠聊天流", "、".join(skipped))
         if parts and conversation_id == global_config.desktop_pet.conversation_session_id:
-            # 主人会话的实际发言主动显示窗口；插件 notice 仍保持原有隐藏语义。
             if not self._visible:
                 await self.control("show")
+            if conversation_id != global_config.desktop_pet.conversation_session_id:
+                return
             command = {"type": "reply", "parts": parts, "message_id": message_id,
                        "sound": global_config.desktop_pet.message_sound}
             if conversation_id:
                 command["conversation_id"] = conversation_id
             await self._command(command)
+            if conversation_id != global_config.desktop_pet.conversation_session_id:
+                return
             self._thinking = False
             text = "".join(part.get("text", "") for part in parts if part.get("kind") == "text")
             self._bubble = _bubble_text(text) or "[图片]"

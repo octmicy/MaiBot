@@ -1,4 +1,4 @@
-import type { ChatStream } from '@/lib/chat-management-api'
+import { getChatStreamDisplayName, type ChatStream } from '@/lib/chat-management-api'
 import type { SessionInfo, StageStatusInfo } from '@/routes/monitor/use-maisaka-monitor'
 
 export function isFocusFlowId(sessionId: string): boolean {
@@ -23,7 +23,7 @@ export function buildObservedSessions(
     const live = observed.get(chat.session_id)
     sessions.set(chat.session_id, {
       sessionId: chat.session_id,
-      sessionName: chat.display_name,
+      sessionName: getChatStreamDisplayName(chat, chats),
       isGroupChat: chat.chat_type === 'group',
       groupId: chat.group_id,
       userId: chat.user_id,

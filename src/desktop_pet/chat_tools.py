@@ -5,19 +5,24 @@ import json
 
 from src.chat.message_receive.chat_manager import chat_manager
 from src.config.config import global_config
+from src.core.desktop_pet_chat import DESKTOP_PET_PLATFORM
 from src.core.internal_chat import INTERNAL_CHAT_PLATFORM, INTERNAL_CHAT_USER_ID
 from src.core.tooling import ToolAvailabilityContext, ToolExecutionContext, ToolExecutionResult, ToolInvocation, ToolSpec
+
+from .conversation import is_desktop_pet_session
 
 
 def is_owner_chat(session_id: str) -> bool:
     session = chat_manager.get_session_by_session_id(session_id)
-    return bool(session is not None
+    return is_desktop_pet_session(session) or bool(session is not None
                 and session.platform == INTERNAL_CHAT_PLATFORM and not session.group_id
                 and session.user_id == INTERNAL_CHAT_USER_ID)
 
 
 def allowed(session_id: str) -> bool:
-    return global_config.desktop_pet.chat_tools_enabled and is_owner_chat(session_id)
+    session = chat_manager.get_session_by_session_id(session_id)
+    return bool(global_config.desktop_pet.chat_tools_enabled and session is not None
+                and session.platform == INTERNAL_CHAT_PLATFORM and is_owner_chat(session_id))
 
 
 class ChatSessionToolProvider:
@@ -60,7 +65,7 @@ class ChatSessionToolProvider:
                 sessions = []
                 for label, session_id in chat_manager.get_named_session_options().items():
                     session = chat_manager.get_session_by_session_id(session_id)
-                    if session is None or session_id == context.session_id:
+                    if session is None or session_id == context.session_id or session.platform == DESKTOP_PET_PLATFORM:
                         continue
                     kind = "group" if session.is_group_session else "private"
                     if (args.get("keyword", "").casefold() not in label.casefold()
@@ -75,7 +80,7 @@ class ChatSessionToolProvider:
                 target = args["target_session_id"]
                 instruction = args["instruction"].strip()
                 session = chat_manager.get_session_by_session_id(target)
-                if session is None or target == context.session_id:
+                if session is None or target == context.session_id or session.platform == DESKTOP_PET_PLATFORM:
                     raise ValueError("请选择其他真实聊天流。")
                 if not instruction or len(instruction) > 10000:
                     raise ValueError("任务内容应为 1 至 10000 字。")

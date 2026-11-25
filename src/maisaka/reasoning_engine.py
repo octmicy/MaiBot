@@ -323,11 +323,25 @@ class MaisakaReasoningEngine:
                 logger.debug(f"{self._runtime.log_prefix} 图片记忆自然拉起失败，已跳过: {exc}")
                 return ""
 
-        injection_names = ("启发式记忆", "人物画像", "图片记忆")
+        async def build_desktop_pet_reference_message() -> str:
+            try:
+                from src.desktop_pet.conversation import is_desktop_pet_session
+                from src.desktop_pet.reference_context import load_reference_context
+
+                if not is_desktop_pet_session(self._runtime.chat_stream):
+                    return ""
+                return await load_reference_context(self._runtime.chat_stream)
+            except Exception as exc:
+                logger.debug(f"{self._runtime.log_prefix} 桌宠参考聊天流读取失败，已跳过: {exc}")
+                return ""
+
+        injection_names = ("启发式记忆", "人物画像", "图片记忆", "桌宠参考聊天")
         pending = set(injection_names)
         elapsed_by_name: Dict[str, float] = {}
         if round_text is not None:
-            self._runtime._update_stage_status("组织上下文", "正在准备：启发式记忆、人物画像、图片记忆", round_text=round_text)
+            self._runtime._update_stage_status(
+                "组织上下文", "正在准备：启发式记忆、人物画像、图片记忆、桌宠参考聊天", round_text=round_text,
+            )
 
         async def measure_injection(name: str, build: Callable[[], Awaitable[Any]]) -> Any:
             started = time.perf_counter()
@@ -344,6 +358,9 @@ class MaisakaReasoningEngine:
             measure_injection("启发式记忆", build_heuristic_memory_message),
             measure_injection("人物画像", build_profile_messages),
             measure_injection("图片记忆", build_image_memory_message),
+        )
+        desktop_pet_reference_message = await measure_injection(
+            "桌宠参考聊天", build_desktop_pet_reference_message,
         )
         if context_timings is None:
             details = "，".join(f"{name}={elapsed_by_name[name]:.2f}s" for name in injection_names)
@@ -372,6 +389,8 @@ class MaisakaReasoningEngine:
         injected_messages.extend(profile_messages)
         if image_memory_message:
             injected_messages.append(image_memory_message)
+        if desktop_pet_reference_message:
+            injected_messages.append(desktop_pet_reference_message)
         return injected_messages
 
     async def _refresh_jargon_reference_message(self) -> Optional[ReferenceMessage]:

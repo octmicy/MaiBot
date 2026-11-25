@@ -106,7 +106,7 @@ async def visibility(body: VisibilityBody):
 
 @router.post("/chat")
 async def chat(body: ChatBody):
-    """首页卡片给桌宠说话：和桌宠窗口里输入一样投递到主人聊天，回复会在桌宠和网页同步显示。"""
+    """首页卡片与桌宠窗口共用当前桌宠会话。"""
     text = body.text.strip()
     if not text:
         raise HTTPException(422, "消息不能为空")
@@ -114,9 +114,10 @@ async def chat(body: ChatBody):
         raise HTTPException(422, f"消息不能超过 {CHAT_MAX_LENGTH} 字")
     if not desktop_pet_service.status()["enabled"]:
         raise HTTPException(409, "桌宠没有开启")
-    from src.webui.routers.chat.service import relay_plugin_chat_message
-
-    message_id = await relay_plugin_chat_message("builtin.desktop_pet", text)
+    try:
+        message_id = await on_main_loop(lambda: desktop_pet_service.submit_chat(text))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
     return {"message_id": message_id}
 
 

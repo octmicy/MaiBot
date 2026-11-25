@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 import asyncio
 
 from src.common.logger import get_logger
+from src.core.desktop_pet_chat import DESKTOP_PET_BOT_ID, DESKTOP_PET_PLATFORM, DESKTOP_PET_USER_ID
 from src.core.local_operator import LOCAL_PLATFORM_BOT_IDS
 from src.platform_io.drivers.base import PlatformIODriver
 
@@ -15,7 +16,7 @@ from .outbound_tracker import OutboundTracker
 from .route_key_factory import RouteKeyFactory
 from .registry import DriverRegistry
 from .routing import RouteTable
-from .types import DeliveryBatch, DeliveryReceipt, DeliveryStatus, InboundMessageEnvelope, RouteBinding, RouteKey
+from .types import DeliveryBatch, DeliveryReceipt, DeliveryStatus, DriverKind, InboundMessageEnvelope, RouteBinding, RouteKey
 
 if TYPE_CHECKING:
     from src.chat.message_receive.message import SessionMessage
@@ -538,6 +539,26 @@ class PlatformIOManager:
         Returns:
             DeliveryBatch: 规范化后的批量出站回执。
         """
+        if message.platform == DESKTOP_PET_PLATFORM or route_key.platform == DESKTOP_PET_PLATFORM:
+            # 本地会话完成出站后由发送服务保存并通知桌宠，设备离线时也可补读。
+            batch = DeliveryBatch(internal_message_id=message.message_id, route_key=route_key)
+            if (
+                message.platform == route_key.platform == DESKTOP_PET_PLATFORM
+                and message.account_id == route_key.account_id == DESKTOP_PET_BOT_ID
+                and message.message_info.group_info is None
+                and message.message_info.additional_config.get("platform_io_target_user_id") == DESKTOP_PET_USER_ID
+            ):
+                batch.receipts.append(
+                    DeliveryReceipt(
+                        internal_message_id=message.message_id,
+                        route_key=route_key,
+                        status=DeliveryStatus.SENT,
+                        driver_id="local.desktop_pet",
+                        driver_kind=DriverKind.LOCAL,
+                    )
+                )
+            return batch
+
         drivers = self.resolve_drivers(route_key)
         if not drivers:
             return DeliveryBatch(internal_message_id=message.message_id, route_key=route_key)

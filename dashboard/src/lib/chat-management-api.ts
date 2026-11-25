@@ -44,6 +44,14 @@ export interface ChatStream {
   latest_message_at: number | null
 }
 
+/** 桌宠会话通过 scope 保存参考聊天流 ID，列表展示时恢复参考流名称。 */
+export function getChatStreamDisplayName(stream: ChatStream, streams: ChatStream[] = []): string {
+  if (stream.platform !== 'desktop_pet') return stream.display_name
+  const source = stream.scope ? streams.find(item => item.session_id === stream.scope) : undefined
+  if (source?.display_name?.trim()) return `桌宠私聊 · ${source.display_name.trim()}`
+  return stream.scope ? '桌宠私聊 · 参考聊天流不可用' : '桌宠私聊'
+}
+
 export interface ChatConfigRule {
   platform: string
   item_id: string
@@ -207,6 +215,8 @@ export interface ChatStreamDetail {
   display_name: string
   chat_type: ChatStreamType
   platform: string
+  account_id: string | null
+  scope: string | null
   target_id: string
   group_id: string | null
   user_id: string | null
